@@ -200,29 +200,17 @@ Current high-level status:
 
 ## Testing
 
-### Lightweight tests (no Home Assistant runtime)
-
 ```zsh
 cd /Users/alex/IdeaProjects/alexbde/ha-joyonway-p25b85
-python3 -m venv .venv
+/opt/homebrew/bin/python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[test]"
 pytest -q
 ```
 
-### Home Assistant runtime tests
-
-```zsh
-cd /Users/alex/IdeaProjects/alexbde/ha-joyonway-p25b85
-/opt/homebrew/bin/python3.12 -m venv .venv-ha
-source .venv-ha/bin/activate
-python -m pip install -U pip
-python -m pip install -e ".[ha-test]"
-pytest -q
-```
-
-Runtime entity tests auto-skip when `homeassistant` is not installed.
+Requires Python 3.12 (Home Assistant compatibility). The `[test]` extra installs
+`pytest-homeassistant-custom-component` and all HA runtime dependencies.
 
 ## Related Projects
 
