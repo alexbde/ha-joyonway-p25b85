@@ -288,6 +288,18 @@ async def test_shutdown_closes_writer(coordinator):
 # ── Optimistic timeout integration tests ─────────────────────────────
 
 
+class _DummyIntentQueue:
+    """Intent queue stub for testing — executes immediately."""
+
+    def __init__(self, coordinator):
+        self._coordinator = coordinator
+
+    def submit(self, group, overrides, build_fn, on_failure=None):
+        frame = build_fn(overrides, self._coordinator.data)
+        if frame is not None:
+            asyncio.ensure_future(self._coordinator.async_send_command(frame))
+
+
 @pytest.mark.asyncio
 async def test_optimistic_timeout_clears_pending_state():
     """Pending state auto-clears after timeout."""
@@ -306,6 +318,7 @@ async def test_optimistic_timeout_clears_pending_state():
         async_send_command = AsyncMock(return_value=True)
 
     coordinator = QuickCoordinator()
+    coordinator.intent_queue = _DummyIntentQueue(coordinator)
     entry = SimpleNamespace(entry_id="e1", data={CONF_HOST: "127.0.0.1"})
     heater = SpaHeaterSwitch(coordinator, entry)
     heater.hass = FakeHass()
@@ -345,6 +358,7 @@ async def test_optimistic_timeout_canceled_on_coordinator_update():
         async_send_command = AsyncMock(return_value=True)
 
     coordinator = QuickCoordinator()
+    coordinator.intent_queue = _DummyIntentQueue(coordinator)
     entry = SimpleNamespace(entry_id="e1", data={CONF_HOST: "127.0.0.1"})
     heater = SpaHeaterSwitch(coordinator, entry)
     heater.hass = FakeHass()
@@ -391,6 +405,7 @@ async def test_pending_timeout_canceled_on_entity_removal():
         async_send_command = AsyncMock(return_value=True)
 
     coordinator = QuickCoordinator()
+    coordinator.intent_queue = _DummyIntentQueue(coordinator)
     entry = SimpleNamespace(entry_id="e1", data={CONF_HOST: "127.0.0.1"})
     heater = SpaHeaterSwitch(coordinator, entry)
     heater.hass = FakeHass()

@@ -84,6 +84,18 @@ class DummyAdapter:
         return None
 
 
+class DummyIntentQueue:
+    """Intent queue stub that fires immediately for testing."""
+
+    def __init__(self, coordinator):
+        self._coordinator = coordinator
+
+    def submit(self, group, overrides, build_fn, on_failure=None):
+        frame = build_fn(overrides, self._coordinator.data)
+        if frame is not None:
+            asyncio.ensure_future(self._coordinator.async_send_command(frame))
+
+
 class DummyCoordinator:
     """Coordinator stub with persistent connection APIs."""
 
@@ -92,6 +104,7 @@ class DummyCoordinator:
         self._available = available
         self.adapter = DummyAdapter()
         self.async_send_command = AsyncMock(return_value=True)
+        self.intent_queue = DummyIntentQueue(self)
 
     @property
     def available(self) -> bool:
@@ -160,6 +173,7 @@ async def test_light_switch_sends_toggle(entry: SimpleNamespace) -> None:
     entity.async_write_ha_state = lambda: None
 
     await entity.async_turn_on()
+    await asyncio.sleep(0)  # let intent queue task execute
 
     coordinator.async_send_command.assert_awaited_once_with(CMD_LIGHT_TOGGLE)
     assert entity._pending_state is True
@@ -178,6 +192,7 @@ async def test_heater_and_blower_switch_commands(entry: SimpleNamespace) -> None
 
     await heater.async_turn_on()
     await blower.async_turn_on()
+    await asyncio.sleep(0)  # let intent queue tasks execute
     # Simulate coordinator update clearing pending state
     blower._handle_coordinator_update()
     coordinator.data["blower"] = True
@@ -185,6 +200,7 @@ async def test_heater_and_blower_switch_commands(entry: SimpleNamespace) -> None
     heater._handle_coordinator_update()
     coordinator.data["status"] = "heating"
     await heater.async_turn_off()
+    await asyncio.sleep(0)  # let intent queue tasks execute
 
     sent = [call.args[0] for call in coordinator.async_send_command.await_args_list]
     assert CMD_HEATER_ON in sent
@@ -230,21 +246,22 @@ async def test_climate_debounced_set_temperature_sends_command(
 ) -> None:
     coordinator = DummyCoordinator(data={"setpoint": 30, "water_temperature": 29})
     climate = SpaClimate(coordinator, entry)
+    climate.hass = DummyHass()
 
     import custom_components.joyonway_p25b85.climate as climate_module
 
-    async def _no_delay(_: float) -> None:
-        return None
-
     monkeypatch.setattr(climate_module, "TEMP_DEBOUNCE_SECONDS", 0)
-    monkeypatch.setattr(climate_module.asyncio, "sleep", _no_delay)
     monkeypatch.setattr(climate, "async_write_ha_state", lambda: None)
 
     climate._pending_temp = 32
     climate._debounce_task = asyncio.current_task()
     await climate._debounced_send(32)
+    await asyncio.sleep(0)  # let intent queue task execute
 
     coordinator.async_send_command.assert_awaited_once_with(b"\xAA")
+    # pending_temp stays until broadcast confirms (optimistic behavior)
+    assert climate._pending_temp == 32
+    climate._cancel_pending_timeout()
 
 
 @pytest.mark.asyncio
