@@ -44,6 +44,10 @@ from .protocol import find_frames, unescape_frame, is_broadcast, validate_frame
 _LOGGER = logging.getLogger(__name__)
 
 
+class IntentBuildError(Exception):
+    """Raised when an intent cannot be built due to invalid/missing prerequisites."""
+
+
 @dataclass
 class _PendingGroup:
     """A batch of coalesced intents for one group."""
@@ -132,7 +136,16 @@ class IntentQueue:
     async def _process_group(self, group_key: str, group: _PendingGroup) -> None:
         """Build and send the coalesced command for one group."""
         data = self._coordinator.data
-        frame = group.build_fn(group.overrides, data)
+        try:
+            frame = group.build_fn(group.overrides, data)
+        except IntentBuildError as err:
+            _LOGGER.error("Intent queue [%s]: %s", group_key, err)
+            self._run_failure_callbacks(group_key, group)
+            return
+        except Exception:
+            _LOGGER.exception("Intent queue [%s]: unexpected build error", group_key)
+            self._run_failure_callbacks(group_key, group)
+            return
 
         if frame is None:
             # No-op: merged intent matches current state (e.g., toggled ON then OFF)
@@ -158,6 +171,11 @@ class IntentQueue:
 
         # All attempts failed
         _LOGGER.error("Intent queue [%s]: command failed after retries", group_key)
+        self._run_failure_callbacks(group_key, group)
+
+    @staticmethod
+    def _run_failure_callbacks(group_key: str, group: _PendingGroup) -> None:
+        """Run registered failure callbacks safely."""
         for cb in group.on_failure_callbacks:
             try:
                 cb()
@@ -171,6 +189,16 @@ class IntentQueue:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_task
             self._flush_task = None
+
+    async def flush(self) -> None:
+        """Immediately drain pending intents (used before config-entry reload)."""
+        if self._flush_task is not None and not self._flush_task.done():
+            self._flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._flush_task
+            self._flush_task = None
+        if self._pending:
+            await self._drain_all()
 
 
 class JoyonwayP25B85Coordinator(DataUpdateCoordinator):

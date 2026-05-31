@@ -18,7 +18,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, OZONE_MODE_MANUAL, OPTIMISTIC_TIMEOUT_SECONDS
-from .coordinator import JoyonwayP25B85Coordinator
+from .coordinator import IntentBuildError, JoyonwayP25B85Coordinator
 from .entity import JoyonwayCoordinatorEntity, device_info
 
 _LOGGER = logging.getLogger(__name__)
@@ -462,12 +462,33 @@ class SpaScheduleSlotSwitch(_SpaTargetStateSwitch):
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self.is_on:
             return
+        self._validate_schedule_data_available()
         self._submit_schedule_intent(enabled=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         if self.is_on is False:
             return
+        self._validate_schedule_data_available()
         self._submit_schedule_intent(enabled=False)
+
+    def _validate_schedule_data_available(self) -> None:
+        """Raise explicit error when schedule payload prerequisites are missing."""
+        data = self.coordinator.data
+        if data is None:
+            raise HomeAssistantError("No data available from spa")
+
+        prefix = self._schedule_type
+        required_keys = [
+            f"{prefix}_slot1_start", f"{prefix}_slot1_end",
+            f"{prefix}_slot2_start", f"{prefix}_slot2_end",
+            f"{prefix}_slot1_enabled", f"{prefix}_slot2_enabled",
+        ]
+        missing = [k for k in required_keys if k not in data]
+        if missing:
+            raise HomeAssistantError(
+                f"Cannot send schedule: missing data keys {missing}. "
+                "Wait for the spa to report a full broadcast before toggling."
+            )
 
     def _submit_schedule_intent(self, enabled: bool) -> None:
         """Submit schedule enable/disable intent to the queue (coalesces with siblings)."""
@@ -477,8 +498,7 @@ class SpaScheduleSlotSwitch(_SpaTargetStateSwitch):
 
         def _build_schedule_state(overrides: dict, data: dict | None) -> bytes | None:
             if data is None:
-                _LOGGER.error("Schedule %s: no data available", schedule_type)
-                return None
+                raise IntentBuildError(f"Schedule {schedule_type}: no data available")
             prefix = schedule_type
             required_keys = [
                 f"{prefix}_slot1_start", f"{prefix}_slot1_end",
@@ -486,8 +506,10 @@ class SpaScheduleSlotSwitch(_SpaTargetStateSwitch):
                 f"{prefix}_slot1_enabled", f"{prefix}_slot2_enabled",
             ]
             if any(k not in data for k in required_keys):
-                _LOGGER.error("Schedule %s: missing data keys", schedule_type)
-                return None
+                missing = [k for k in required_keys if k not in data]
+                raise IntentBuildError(
+                    f"Schedule {schedule_type}: missing data keys {missing}"
+                )
 
             # Start from current data, apply overrides
             s1_start = data[f"{prefix}_slot1_start"]

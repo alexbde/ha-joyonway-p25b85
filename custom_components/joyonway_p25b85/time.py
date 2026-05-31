@@ -19,7 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, OPTIMISTIC_TIMEOUT_SECONDS
-from .coordinator import JoyonwayP25B85Coordinator
+from .coordinator import IntentBuildError, JoyonwayP25B85Coordinator
 from .entity import JoyonwayCoordinatorEntity, device_info
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,9 +136,7 @@ class SpaScheduleTime(JoyonwayCoordinatorEntity, TimeEntity):
 
     async def async_set_value(self, value: time) -> None:
         """Set a new time value via intent queue."""
-        data = self.coordinator.data
-        if data is None:
-            raise HomeAssistantError("No data available from spa")
+        self._validate_schedule_data_available()
 
         new_val = (value.hour, value.minute)
         self._set_pending_state(new_val)
@@ -148,8 +146,7 @@ class SpaScheduleTime(JoyonwayCoordinatorEntity, TimeEntity):
 
         def _build_schedule_time(overrides: dict, data: dict | None) -> bytes | None:
             if data is None:
-                _LOGGER.error("Schedule %s: no data available", schedule_type)
-                return None
+                raise IntentBuildError(f"Schedule {schedule_type}: no data available")
             prefix = schedule_type
             required_keys = [
                 f"{prefix}_slot1_start", f"{prefix}_slot1_end",
@@ -157,8 +154,10 @@ class SpaScheduleTime(JoyonwayCoordinatorEntity, TimeEntity):
                 f"{prefix}_slot1_enabled", f"{prefix}_slot2_enabled",
             ]
             if any(k not in data for k in required_keys):
-                _LOGGER.error("Schedule %s: missing data keys", schedule_type)
-                return None
+                missing = [k for k in required_keys if k not in data]
+                raise IntentBuildError(
+                    f"Schedule {schedule_type}: missing data keys {missing}"
+                )
 
             # Start from current data
             s1_start = data[f"{prefix}_slot1_start"]
@@ -215,3 +214,23 @@ class SpaScheduleTime(JoyonwayCoordinatorEntity, TimeEntity):
             build_fn=_build_schedule_time,
             on_failure=_on_failure,
         )
+
+    def _validate_schedule_data_available(self) -> None:
+        """Raise explicit error when schedule payload prerequisites are missing."""
+        data = self.coordinator.data
+        if data is None:
+            raise HomeAssistantError("No data available from spa")
+
+        prefix = self._schedule_type
+        required_keys = [
+            f"{prefix}_slot1_start", f"{prefix}_slot1_end",
+            f"{prefix}_slot2_start", f"{prefix}_slot2_end",
+            f"{prefix}_slot1_enabled", f"{prefix}_slot2_enabled",
+        ]
+        missing = [k for k in required_keys if k not in data]
+        if missing:
+            raise HomeAssistantError(
+                f"Cannot send schedule: missing data keys {missing}. "
+                "Wait for the spa to report a full broadcast before changing times."
+            )
+
