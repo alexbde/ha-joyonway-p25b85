@@ -9,8 +9,9 @@
 >
 > **Integration domain:** `joyonway_p25b85`
 > **Hardware:** P25B85 + PB554 + Elfin EW11
-> **Status:** Resilient UI refactor implemented and post-refactor code review/polish completed.
-> Persistent TCP connection, optimistic state, grace-mode availability for entities.
+> **Status:** Resilient UI refactor implemented with intent-queue follow-up fixes merged.
+> Persistent TCP connection, optimistic state, grace-mode availability, explicit
+> schedule-write failure path (no silent no-op on missing schedule data).
 
 > **Documentation policy:** `docs/protocol.md` is the canonical protocol spec.
 > This `docs/plan.md` is progress/handoff only.
@@ -140,7 +141,8 @@ custom_components/joyonway_p25b85/
 - **Schedule freshness gating** — removed (previously `async_ensure_fresh_data()`).
   Now handled naturally by the intent queue: build_fn reads current coordinator
   data at drain time (after coalesce window), which is always as fresh as the
-  latest broadcast. If data is None/missing, build_fn returns None (no command).
+  latest broadcast. If required schedule data is missing, writes fail explicitly
+  (`HomeAssistantError` on submit path, `IntentBuildError` on queue drain).
 - **Light toggle-lock** — second click ignored while toggle is in-flight
   (prevents double-toggle reverting the state).
 - **Target-state switches** — heater, blower, ozone, schedule all use
@@ -296,7 +298,7 @@ both heat and filter schedules.
 
 - **`.env` file** holds bridge IP (gitignored). Tools auto-load it.
 - **Restart required** after any code change to the integration.
-- **Tests**: `source .venv/bin/activate && pytest -q` → `114 passed`.
+- **Tests**: `source .venv/bin/activate && pytest -q` → `120 passed`.
   Single venv (Python 3.12 + HA test deps via `pip install -e ".[test]"`).
 - **EW11 connection limit**: 4 concurrent TCP clients. HA uses 1, tools can use up to 3 more.
 - **Community feedback source**: https://community.home-assistant.io/t/joyonway-spa-control/582344/
@@ -375,3 +377,17 @@ both heat and filter schedules.
   with 10s timeout), routed ALL command paths through the queue (clock sync
   in coordinator, ozone mode in `__init__.py`), added WARNING-level logs on
   all pending-state timeouts (non-silent snap-back). Tests: `114 passed`.
+- **Session 23 (2026-05-31):** Intent-queue follow-up bugfix/polish pass.
+  Fixed options-flow race where ozone mode command could be dropped on reload:
+  `_async_options_updated()` now submits then `await intent_queue.flush()`
+  before config-entry reload. Added explicit intent-build failure path via
+  `IntentBuildError` handling in `IntentQueue` (build failures now trigger
+  `on_failure` callbacks instead of silent no-op behavior). Schedule writes now
+  fail explicitly on missing required data (`HomeAssistantError` in service
+  path; `IntentBuildError` at queue-drain path). Added/updated regression tests:
+  - `tests/test_coordinator_resilient.py` (flush + build failure callbacks)
+  - `tests/test_entities_runtime.py` (schedule missing-data errors)
+  - `tests/test_init_runtime.py` (options update order: submit → flush → reload)
+  Also cleaned code style in `IntentQueue` by deduplicating failure-callback
+  dispatch into a helper and corrected ozone log wording to avoid implying
+  guaranteed send success. Tests: `120 passed`.
