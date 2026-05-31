@@ -29,7 +29,10 @@ from custom_components.joyonway_p25b85.const import (
     OPTIMISTIC_TIMEOUT_SECONDS,
     RX_STALE_SECONDS,
 )
-from custom_components.joyonway_p25b85.coordinator import JoyonwayP25B85Coordinator
+from custom_components.joyonway_p25b85.coordinator import (
+    IntentBuildError,
+    JoyonwayP25B85Coordinator,
+)
 
 
 class FakeHass:
@@ -283,6 +286,45 @@ async def test_shutdown_closes_writer(coordinator):
     mock_writer.close.assert_called_once()
     mock_writer.wait_closed.assert_awaited_once()
     assert coordinator._writer is None
+
+
+@pytest.mark.asyncio
+async def test_intent_queue_flush_drains_pending_immediately(coordinator):
+    """flush() sends queued intents immediately (without waiting coalesce timer)."""
+    coordinator.async_send_command = AsyncMock(return_value=True)
+
+    coordinator.intent_queue.submit(
+        group="test_group",
+        overrides={"x": 1},
+        build_fn=lambda overrides, data: b"\xAA",
+    )
+    await coordinator.intent_queue.flush()
+
+    coordinator.async_send_command.assert_awaited_once_with(b"\xAA")
+
+
+@pytest.mark.asyncio
+async def test_intent_queue_build_error_triggers_on_failure(coordinator):
+    """IntentBuildError is explicit failure (not silent no-op)."""
+    coordinator.async_send_command = AsyncMock(return_value=True)
+    failed = {"value": False}
+
+    def _on_failure() -> None:
+        failed["value"] = True
+
+    def _build(_overrides, _data):
+        raise IntentBuildError("missing schedule keys")
+
+    coordinator.intent_queue.submit(
+        group="test_group",
+        overrides={"x": 1},
+        build_fn=_build,
+        on_failure=_on_failure,
+    )
+    await coordinator.intent_queue.flush()
+
+    assert failed["value"] is True
+    coordinator.async_send_command.assert_not_awaited()
 
 
 # ── Optimistic timeout integration tests ─────────────────────────────

@@ -6,6 +6,7 @@ They auto-skip when Home Assistant is not installed.
 from __future__ import annotations
 
 import asyncio
+from datetime import time as dt_time
 from pathlib import Path
 import sys
 import time
@@ -39,7 +40,9 @@ from custom_components.joyonway_p25b85.switch import (
     SpaBlowerSwitch,
     SpaHeaterSwitch,
     SpaLightSwitch,
+    SpaScheduleSlotSwitch,
 )
+from custom_components.joyonway_p25b85.time import SpaScheduleTime
 
 # Build real command frames for assertion
 _adapter = P25B85Adapter()
@@ -311,3 +314,30 @@ async def test_fan_optimistic_preset_mode(entry: SimpleNamespace) -> None:
     assert fan.is_on is True
     assert fan.preset_mode == "low"
     fan._cancel_pending_timeout()
+
+
+@pytest.mark.asyncio
+async def test_schedule_switch_missing_data_raises(entry: SimpleNamespace) -> None:
+    coordinator = DummyCoordinator(data={"heat_slot1_enabled": False})
+    entity = SpaScheduleSlotSwitch(coordinator, entry, "heat", 1)
+
+    with pytest.raises(HomeAssistantError, match="missing data keys"):
+        await entity.async_turn_on()
+
+
+@pytest.mark.asyncio
+async def test_schedule_time_missing_data_raises(entry: SimpleNamespace) -> None:
+    coordinator = DummyCoordinator(data={"heat_slot1_start": (8, 0)})
+    entity = SpaScheduleTime(
+        coordinator,
+        entry,
+        "heat_slot1_start",
+        "heat",
+        1,
+        "start",
+        "mdi:clock-start",
+    )
+
+    with pytest.raises(HomeAssistantError, match="missing data keys"):
+        await entity.async_set_value(dt_time(hour=9, minute=30))
+
